@@ -38,7 +38,6 @@ import os  # 系统操作
 import time  # 时间操作
 from urllib.parse import urlencode, quote  # URL编码
 import yaml  # 配置文件
-
 # 基础爬虫客户端和抖音API端点
 from crawlers.base_crawler import BaseCrawler
 from crawlers.douyin.web.endpoints import DouyinAPIEndpoints
@@ -66,7 +65,6 @@ path = os.path.abspath(os.path.dirname(__file__))
 with open(f"{path}/config.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
-
 class DouyinWebCrawler:
 
     # 从配置文件中获取抖音的请求头
@@ -84,6 +82,128 @@ class DouyinWebCrawler:
         return kwargs
 
     "-------------------------------------------------------handler接口列表-------------------------------------------------------"
+    #获取用户的所有视频信息并可选择下载视频
+    # 获取用户的所有视频信息并可选择下载视频
+    async def get_all_user_videos(self, share_url: str, save_to_file=True, output_folder="output"):
+        """
+        获取用户的所有视频ID并可选择保存到文件
+
+        Args:
+            share_url (str): 用户分享链接
+            save_to_file (bool): 是否将结果保存到文件，默认为True
+            output_folder (str): 输出文件夹路径，默认为"output"
+
+        Returns:
+            dict: 包含用户信息和视频ID列表的字典
+        """
+        try:
+            print(f"正在解析用户链接: {share_url}")
+            sec_user_id = await self.get_sec_user_id(share_url)
+            if isinstance(sec_user_id, dict) and "data" in sec_user_id:
+                sec_user_id = sec_user_id["data"]
+
+            if not sec_user_id:
+                print("无法解析用户ID，请检查链接是否正确")
+                return {"success": False, "error": "无法解析用户ID"}
+
+            print(f"成功获取用户ID: {sec_user_id}")
+
+            # 获取用户信息
+            user_response = await self.handler_user_profile(sec_user_id)
+            if isinstance(user_response, dict) and "data" in user_response:
+                user_data = user_response["data"]
+            else:
+                user_data = user_response
+
+            if "user" not in user_data:
+                print("无法获取用户信息")
+                return {"success": False, "error": "无法获取用户信息"}
+
+            user_info = user_data["user"]
+            nickname = user_info.get("nickname", "未知用户")
+
+            # 分页获取所有视频ID
+            all_aweme_ids = []
+            max_cursor = 0
+            has_more = 1
+
+            while has_more:
+                print(f"正在获取作品列表，max_cursor={max_cursor}")
+                response = await self.fetch_user_post_videos(sec_user_id, max_cursor, 20)
+
+                # 获取返回数据中的实际内容
+                if isinstance(response, dict) and "data" in response:
+                    data = response["data"]
+                else:
+                    data = response
+
+                # 从data中提取视频列表
+                aweme_list = data.get("aweme_list", [])
+                if not aweme_list:
+                    print("没有获取到作品数据，可能到达最后一页")
+                    break
+
+                # 提取每个作品的ID
+                for aweme in aweme_list:
+                    aweme_id = aweme.get("aweme_id")
+                    if aweme_id:
+                        all_aweme_ids.append(aweme_id)
+
+                print(f"已获取{len(aweme_list)}个作品，累计{len(all_aweme_ids)}个")
+
+                # 检查是否有更多数据
+                has_more = data.get("has_more", 0)
+                max_cursor = data.get("max_cursor", 0)
+
+            print(f"全部完成，共获取{len(all_aweme_ids)}个作品ID")
+
+            # 创建结果数据
+            result = {
+                "success": True,
+                "user_info": {
+                    "sec_user_id": sec_user_id,
+                    "nickname": nickname
+                },
+                "aweme_ids": all_aweme_ids,
+                "count": len(all_aweme_ids)
+            }
+
+            # 将结果保存到文件
+            if save_to_file:
+                import os
+                import json
+                from datetime import datetime
+
+                # 确保输出目录存在
+                os.makedirs(output_folder, exist_ok=True)
+
+                # 创建安全的文件名
+                safe_nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{safe_nickname}_{timestamp}_video_ids.json"
+                filepath = os.path.join(output_folder, filename)
+
+                # 保存到JSON文件
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+
+                print(f"已将用户视频信息保存到: {filepath}")
+                result["file_path"] = filepath
+
+
+            return result
+
+        except Exception as e:
+            print(f"获取用户视频列表出错: {e}")
+            return {"success": False, "error": str(e)}
+
+
+
+
+
+
+
+
 
     # 获取单个作品数据
     async def fetch_one_video(self, aweme_id: str):

@@ -154,3 +154,314 @@ async def download_file_hybrid(request: Request,
         print(e)
         code = 400
         return ErrorResponseModel(code=code, message=str(e), router=request.url.path, params=dict(request.query_params))
+
+@router.get("/downloadAll", summary="下载用户所有作品")
+async def download_user_works(
+    request: Request,
+    share_url: str = Query(..., description="用户分享链接"),
+    base_folder: str = Query(default="downloads", description="下载保存路径"),
+    with_watermark: bool = Query(default=False, description="是否下载带水印版本")
+):
+    """
+    根据作品ID列表下载用户的所有作品，并按照视频和图片分类存储
+
+    Args:
+        nickname (str): 用户昵称，用于创建文件夹
+        all_aweme_ids (list): 作品ID列表
+        base_folder (str): 基础文件夹路径
+        with_watermark (bool): 是否下载带水印版本，默认为False
+
+    Returns:
+        dict: 下载结果统计
+    """
+    import os
+    import aiofiles
+    import httpx
+    import asyncio
+    from datetime import datetime
+    import json
+    import zipfile
+    result = await HybridCrawler.DouyinWebCrawler.get_all_user_videos(share_url)
+
+    if not result.get("success", False):
+        code = 400
+        return ErrorResponseModel(code=code, message=result.get("error"), router=request.url.path,
+                                  params=dict(request.query_params))
+    nickname = result["user_info"]["nickname"]
+    all_aweme_ids = result["aweme_ids"]
+
+    # 清理昵称，确保可以作为文件夹名
+    safe_nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
+
+    # 创建用户文件夹结构
+    user_folder = os.path.join(base_folder, safe_nickname)
+    video_folder = os.path.join(user_folder, "video")
+    image_folder = os.path.join(user_folder, "image")
+
+    os.makedirs(user_folder, exist_ok=True)
+    os.makedirs(video_folder, exist_ok=True)
+    os.makedirs(image_folder, exist_ok=True)
+
+    print(f"用户: {nickname}")
+    print(f"待下载作品数: {len(all_aweme_ids)}")
+    print(f"保存目录: {user_folder}")
+
+    # 下载统计
+    download_stats = {
+        "total": len(all_aweme_ids),
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "video_count": 0,
+        "image_count": 0,
+        "details": []
+    }
+
+    # 获取headers
+    kwargs = await HybridCrawler.DouyinWebCrawler.get_douyin_headers()
+
+    # 下载每个作品
+    for index, aweme_id in enumerate(all_aweme_ids):
+        print(f"[{index + 1}/{len(all_aweme_ids)}] 正在处理作品: {aweme_id}")
+
+        try:
+            # 获取作品详情
+            detail_response = await HybridCrawler.DouyinWebCrawler.fetch_one_video(aweme_id)
+            if isinstance(detail_response, dict) and "data" in detail_response:
+                detail_data = detail_response["data"]
+            else:
+                detail_data = detail_response
+
+            aweme_detail = detail_data.get("aweme_detail", {})
+            if not aweme_detail:
+                print(f"获取作品详情失败: {aweme_id}")
+                download_stats["failed"] += 1
+                download_stats["details"].append({
+                    "aweme_id": aweme_id,
+                    "status": "failed",
+                    "error": "获取详情失败"
+                })
+                continue
+
+            # 提取基本信息
+            desc = aweme_detail.get("desc", "").strip() or f"作品_{aweme_id}"
+            create_time = datetime.fromtimestamp(aweme_detail.get("create_time", 0)).strftime("%Y%m%d")
+
+            # 处理文件名，去除非法字符
+            safe_desc = "".join([c if c.isalnum() or c in " _-" else "_" for c in desc])
+            safe_desc = safe_desc[:50]  # 限制长度
+
+            # 判断作品类型：视频或图片集
+            if aweme_detail.get("images") is not None:
+                # 处理图片集
+                image_list = aweme_detail.get("images", [])
+                if not image_list:
+                    print(f"无法获取图片列表: {aweme_id}")
+                    download_stats["failed"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "image",
+                        "desc": desc,
+                        "status": "failed",
+                        "error": "无法获取图片列表"
+                    })
+                    continue
+
+                # 创建作品专属文件夹
+                image_set_folder = os.path.join(image_folder, f"{aweme_id}")
+                os.makedirs(image_set_folder, exist_ok=True)
+
+                image_success = 0
+                image_failed = 0
+
+                # 下载每张图片
+                for img_index, img in enumerate(image_list):
+                    img_filename = f"{img_index + 1}.jpg"
+                    img_filepath = os.path.join(image_set_folder, img_filename)
+
+                    # 检查图片是否已存在
+                    if os.path.exists(img_filepath):
+                        print(f"图片已存在，跳过下载: {img_filename}")
+                        image_success += 1
+                        continue
+
+                    # 获取图片URL
+                    url_list = img.get("url_list", [])
+                    if not url_list:
+                        print(f"无法获取图片URL: 图片{img_index + 1}")
+                        image_failed += 1
+                        continue
+
+                    # 选择URL
+                    img_url = url_list[0]  # 默认无水印
+
+                    # 下载图片
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            response = await client.get(img_url, headers=kwargs["headers"], follow_redirects=True)
+                            if response.status_code == 200:
+                                async with aiofiles.open(img_filepath, 'wb') as f:
+                                    await f.write(response.content)
+                                print(f"下载成功: 图片{img_index + 1}")
+                                image_success += 1
+                            else:
+                                print(f"下载图片失败，状态码: {response.status_code}")
+                                image_failed += 1
+                    except Exception as e:
+                        print(f"下载图片出错: {e}")
+                        image_failed += 1
+
+                # 更新统计
+                if image_failed == 0 and image_success > 0:
+                    download_stats["success"] += 1
+                    download_stats["image_count"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "image",
+                        "desc": desc,
+                        "folder": os.path.basename(image_set_folder),
+                        "count": image_success,
+                        "status": "success"
+                    })
+                elif image_success > 0:
+                    download_stats["success"] += 1
+                    download_stats["image_count"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "image",
+                        "desc": desc,
+                        "folder": os.path.basename(image_set_folder),
+                        "count": image_success,
+                        "failed": image_failed,
+                        "status": "partial"
+                    })
+                else:
+                    download_stats["failed"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "image",
+                        "desc": desc,
+                        "status": "failed",
+                        "error": "所有图片下载失败"
+                    })
+                    # 删除空文件夹
+                    try:
+                        os.rmdir(image_set_folder)
+                    except:
+                        pass
+
+            else:
+                # 处理视频
+                filename = f"{aweme_id}.mp4"
+                filepath = os.path.join(video_folder, filename)
+
+                # 检查视频是否已存在
+                if os.path.exists(filepath):
+                    print(f"视频已存在，跳过下载: {filename}")
+                    download_stats["skipped"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "video",
+                        "desc": desc,
+                        "filename": filename,
+                        "status": "skipped"
+                    })
+                    continue
+
+                # 获取视频URL
+                video_data = aweme_detail.get("video", {})
+                play_addr = video_data.get("play_addr", {})
+                download_addr = video_data.get("download_addr", {})
+
+                # 选择合适的URL
+                url_list = []
+                if not with_watermark:
+                    url_list = play_addr.get("url_list", [])
+                else:
+                    url_list = download_addr.get("url_list", [])
+
+                if not url_list:
+                    print(f"无法获取视频URL: {aweme_id}")
+                    download_stats["failed"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "video",
+                        "desc": desc,
+                        "status": "failed",
+                        "error": "无法获取视频URL"
+                    })
+                    continue
+
+                video_url = url_list[0]
+
+                # 下载视频
+                print(f"正在下载视频: {filename}")
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(video_url, headers=kwargs["headers"], follow_redirects=True)
+                        if response.status_code == 200:
+                            async with aiofiles.open(filepath, 'wb') as f:
+                                await f.write(response.content)
+                            print(f"下载成功: {filename}")
+                            download_stats["success"] += 1
+                            download_stats["video_count"] += 1
+                            download_stats["details"].append({
+                                "aweme_id": aweme_id,
+                                "type": "video",
+                                "desc": desc,
+                                "filename": filename,
+                                "status": "success"
+                            })
+                        else:
+                            print(f"下载失败，状态码: {response.status_code}")
+                            download_stats["failed"] += 1
+                            download_stats["details"].append({
+                                "aweme_id": aweme_id,
+                                "type": "video",
+                                "desc": desc,
+                                "filename": filename,
+                                "status": "failed",
+                                "error": f"HTTP状态码: {response.status_code}"
+                            })
+                except Exception as e:
+                    print(f"下载视频出错: {e}")
+                    download_stats["failed"] += 1
+                    download_stats["details"].append({
+                        "aweme_id": aweme_id,
+                        "type": "video",
+                        "desc": desc,
+                        "filename": filename,
+                        "status": "failed",
+                        "error": str(e)
+                    })
+
+        except Exception as e:
+            print(f"处理作品时出错: {e}")
+            download_stats["failed"] += 1
+            download_stats["details"].append({
+                "aweme_id": aweme_id,
+                "status": "failed",
+                "error": str(e)
+            })
+
+        # 添加延迟避免请求过快
+        await asyncio.sleep(15)
+
+    # 保存下载统计
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stats_file = os.path.join(user_folder, f"download_stats_{timestamp}.json")
+
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump({
+            "user_info": {
+                "nickname": nickname,
+                "downloaded_count": len(all_aweme_ids)
+            },
+            "download_stats": download_stats
+        }, f, ensure_ascii=False, indent=2)
+
+    print(f"下载完成，总共: {download_stats['total']}，成功: {download_stats['success']}，"
+          f"失败: {download_stats['failed']}，跳过: {download_stats['skipped']}")
+    print(f"视频: {download_stats['video_count']}，图片集: {download_stats['image_count']}")
+
+    return download_stats

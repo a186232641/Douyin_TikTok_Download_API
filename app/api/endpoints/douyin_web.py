@@ -1068,3 +1068,41 @@ async def get_all_webcast_id(request: Request,
                                     params=dict(request.query_params),
                                     )
         raise HTTPException(status_code=status_code, detail=detail.dict())
+@router.get("/get_all_user_video",
+            response_model=ResponseModel,
+            summary="提取用户所有作品/Extract single user all vedio")
+async def get_all_user_video(request: Request,
+                          url: str = Query(
+                              example="https://www.douyin.com/user/MS4wLjABAAAANXSltcLCzDGmdNFI2Q_QixVTr67NiYzjKOIP5s03CAE")):
+    """
+    # [中文]
+    ### 用途:
+    - 提取单个用户id
+    ### 参数:
+    - url: 用户主页链接
+    ### 返回:
+    - 用户sec_user_id
+
+    # [English]
+    ### Purpose:
+    - Extract single user id
+    ### Parameters:
+    - url: User homepage link
+    ### Return:
+    - User sec_user_id
+
+    # [示例/Example]
+    url = "https://www.douyin.com/user/MS4wLjABAAAANXSltcLCzDGmdNFI2Q_QixVTr67NiYzjKOIP5s03CAE"
+    """
+    try:
+        data = await DouyinWebCrawler.get_all_user_videos(url)
+        return ResponseModel(code=200,
+                             router=request.url.path,
+                             data=data)
+    except Exception as e:
+        status_code = 400
+        detail = ErrorResponseModel(code=status_code,
+                                    router=request.url.path,
+                                    params=dict(request.query_params),
+                                    )
+        raise HTTPException(status_code=status_code, detail=detail.dict())
