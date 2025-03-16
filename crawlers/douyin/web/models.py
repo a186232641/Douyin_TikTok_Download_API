@@ -31,18 +31,6 @@ class BaseRequestModel(BaseModel):
     # downlink: int = 10
     # effective_type: str = "4g"
     # round_trip_time: int = 100
-    downlink: str = "10"
-    effective_type: str = "4g"
-    from_user_page: str = "1"
-    locate_query: str = "false"
-    need_time_list: str = "1"
-    pc_libra_divert: str = "Windows"
-    publish_video_strategy_type: str = "2"
-    round_trip_time: str = "0"
-    show_live_replay_strategy: str = "1"
-    time_list_query: str = "0"
-    whale_cut_token: str = ""
-    update_version_code: str = "170400"
     msToken: str = TokenManager.gen_real_msToken()
 
 
