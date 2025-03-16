@@ -162,7 +162,8 @@ class DouyinWebCrawler:
                 "success": True,
                 "user_info": {
                     "sec_user_id": sec_user_id,
-                    "nickname": nickname
+                    "nickname": nickname,
+                    "url":share_url
                 },
                 "aweme_ids": all_aweme_ids,
                 "count": len(all_aweme_ids)

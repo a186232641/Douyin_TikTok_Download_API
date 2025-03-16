@@ -185,8 +185,6 @@ async def download_file_hybrid(request: Request,
 async def download_user_works(
     request: Request,
     share_url: str = Query(..., description="用户分享链接"),
-    base_folder: str = Query(default="downloads", description="下载保存路径"),
-    with_watermark: bool = Query(default=False, description="是否下载带水印版本")
 ):
     """
     根据作品ID列表下载用户的所有作品，并按照视频和图片分类存储
@@ -208,7 +206,8 @@ async def download_user_works(
     import json
     import zipfile
     result = await HybridCrawler.DouyinWebCrawler.get_all_user_videos(share_url)
-
+    base_folder = 'downloads'
+    with_watermark = False
     if not result.get("success", False):
         code = 400
         return ErrorResponseModel(code=code, message=result.get("error"), router=request.url.path,
@@ -217,10 +216,10 @@ async def download_user_works(
     all_aweme_ids = result["aweme_ids"]
 
     # 清理昵称，确保可以作为文件夹名
-    safe_nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
+    # safe_nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
 
     # 创建用户文件夹结构
-    user_folder = os.path.join(base_folder, safe_nickname)
+    user_folder = os.path.join(base_folder, nickname)
     video_folder = os.path.join(user_folder, "video")
     image_folder = os.path.join(user_folder, "image")
 
@@ -235,6 +234,7 @@ async def download_user_works(
     # 下载统计
     download_stats = {
         "total": len(all_aweme_ids),
+        "URL": share_url,
         "success": 0,
         "failed": 0,
         "skipped": 0,
@@ -294,16 +294,16 @@ async def download_user_works(
                     continue
 
                 # 创建作品专属文件夹
-                image_set_folder = os.path.join(image_folder, f"{aweme_id}")
-                os.makedirs(image_set_folder, exist_ok=True)
+                # image_set_folder = os.path.join(image_folder, f"{aweme_id}")
+                # os.makedirs(image_set_folder, exist_ok=True)
 
                 image_success = 0
                 image_failed = 0
 
                 # 下载每张图片
                 for img_index, img in enumerate(image_list):
-                    img_filename = f"{img_index + 1}.jpg"
-                    img_filepath = os.path.join(image_set_folder, img_filename)
+                    img_filename = f"{aweme_id}-{img_index + 1}.jpg"
+                    img_filepath = os.path.join(image_folder, img_filename)
 
                     # 检查图片是否已存在
                     if os.path.exists(img_filepath):
@@ -345,7 +345,7 @@ async def download_user_works(
                         "aweme_id": aweme_id,
                         "type": "image",
                         "desc": desc,
-                        "folder": os.path.basename(image_set_folder),
+                        "folder": os.path.basename(image_folder),
                         "count": image_success,
                         "status": "success"
                     })
@@ -356,7 +356,7 @@ async def download_user_works(
                         "aweme_id": aweme_id,
                         "type": "image",
                         "desc": desc,
-                        "folder": os.path.basename(image_set_folder),
+                        "folder": os.path.basename(image_folder),
                         "count": image_success,
                         "failed": image_failed,
                         "status": "partial"
@@ -372,7 +372,7 @@ async def download_user_works(
                     })
                     # 删除空文件夹
                     try:
-                        os.rmdir(image_set_folder)
+                        os.rmdir(image_folder)
                     except:
                         pass
 
@@ -471,7 +471,7 @@ async def download_user_works(
             })
 
         # 添加延迟避免请求过快
-        await asyncio.sleep(15)
+        await asyncio.sleep(10)
 
     # 保存下载统计
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
