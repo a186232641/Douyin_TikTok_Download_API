@@ -61,7 +61,7 @@ class TokenManager:
             }
         )
 
-        headers = {
+        headers = { 
             "User-Agent": cls.token_conf["User-Agent"],
             "Content-Type": "application/json",
         }

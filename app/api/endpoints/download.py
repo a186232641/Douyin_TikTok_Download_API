@@ -212,11 +212,11 @@ async def download_user_works(
         code = 400
         return ErrorResponseModel(code=code, message=result.get("error"), router=request.url.path,
                                   params=dict(request.query_params))
-    nickname = result["user_info"]["nickname"]
+    nickname =  result["user_info"]["nickname"]
     all_aweme_ids = result["aweme_ids"]
 
     # 清理昵称，确保可以作为文件夹名
-    # safe_nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
+    nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
 
     # 创建用户文件夹结构
     user_folder = os.path.join(base_folder, nickname)
