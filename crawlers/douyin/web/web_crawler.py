@@ -110,6 +110,7 @@ class DouyinWebCrawler:
 
             # 获取用户信息
             user_response = await self.handler_user_profile(sec_user_id)
+
             if isinstance(user_response, dict) and "data" in user_response:
                 user_data = user_response["data"]
             else:
@@ -120,6 +121,7 @@ class DouyinWebCrawler:
                 return {"success": False, "error": "无法获取用户信息"}
 
             user_info = user_data["user"]
+            unique_id = user_response['user']['unique_id']
             nickname = user_info.get("nickname", "未知用户")
 
             # 分页获取所有视频ID
@@ -163,7 +165,8 @@ class DouyinWebCrawler:
                 "user_info": {
                     "sec_user_id": sec_user_id,
                     "nickname": nickname,
-                    "url":share_url
+                    "url":share_url,
+                    "unique_id":unique_id
                 },
                 "aweme_ids": all_aweme_ids,
                 "count": len(all_aweme_ids)
