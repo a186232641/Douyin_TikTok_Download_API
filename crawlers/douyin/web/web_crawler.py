@@ -162,6 +162,7 @@ class DouyinWebCrawler:
             # 创建结果数据
             result = {
                 "success": True,
+
                 "user_info": {
                     "sec_user_id": sec_user_id,
                     "nickname": nickname,
@@ -169,7 +170,8 @@ class DouyinWebCrawler:
                     "unique_id":unique_id
                 },
                 "aweme_ids": all_aweme_ids,
-                "count": len(all_aweme_ids)
+                "count": len(all_aweme_ids),
+                "fullUserInfo":user_response
             }
 
             # 将结果保存到文件
