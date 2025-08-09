@@ -119,24 +119,36 @@ class DouyinWebCrawler:
                 "uid": user_response['user']['uid'],
                 "sec_uid": user_response['user']['sec_uid'],
                 "unique_id": user_response['user']['unique_id'],
-                "short_id": user_response['user']['short_id'],
+                "short_id": user_response['user']['short_id'] or "0",
                 "nickname": user_response['user']['nickname'],
-                "signature": user_response['user']['signature'],
-                "gender": user_response['user']['gender'],
-                "country": user_response['user']['country'],
-                "province": user_response['user']['province'],
-                "city": user_response['user']['city'],
-                "district": user_response['user']['district'],
-                "ip_location": user_response['user']['ip_location'],
-                "aweme_count": user_response['user']['aweme_count'],
-                "follower_count": user_response['user']['follower_count'],
-                "following_count": user_response['user']['following_count'],
-                "favoriting_count": user_response['user']['favoriting_count'],
-                "total_favorited": user_response['user']['total_favorited'],
-                "max_follower_count": user_response['user']['max_follower_count'],
-                "avatar_larger": user_response['user']['avatar_larger']['url_list'][0],
-                "live_status": user_response['user']['live_status'],
-                "room_id": user_response['user']['room_id'],
+                "signature": user_response['user']['signature'] or "",
+                "gender": user_response['user']['gender'] if user_response['user']['gender'] is not None else 0,
+                "country": user_response['user']['country'] or "",
+                "province": user_response['user']['province'] or "",
+                "city": user_response['user']['city'] or "",
+                "district": user_response['user']['district'] or "",
+                "ip_location": user_response['user']['ip_location'] or "",
+                "aweme_count": user_response['user']['aweme_count'] if user_response['user'][
+                                                                           'aweme_count'] is not None else 0,
+                "follower_count": user_response['user']['follower_count'] if user_response['user'][
+                                                                                 'follower_count'] is not None else 0,
+                "following_count": user_response['user']['following_count'] if user_response['user'][
+                                                                                   'following_count'] is not None else 0,
+                "favoriting_count": user_response['user']['favoriting_count'] if user_response['user'][
+                                                                                     'favoriting_count'] is not None else 0,
+                "total_favorited": user_response['user']['total_favorited'] if user_response['user'][
+                                                                                   'total_favorited'] is not None else 0,
+                "max_follower_count": user_response['user']['max_follower_count'] if user_response['user'][
+                                                                                         'max_follower_count'] is not None else 0,
+                "avatar_larger": user_response['user']['avatar_larger']['url_list'][0] if user_response['user'][
+                                                                                              'avatar_larger'] and
+                                                                                          user_response['user'][
+                                                                                              'avatar_larger'][
+                                                                                              'url_list'] else "",
+                "live_status": user_response['user']['live_status'] if user_response['user'][
+                                                                           'live_status'] is not None else 0,
+                "room_id": str(user_response['user']['room_id']) if user_response['user'][
+                                                                        'room_id'] is not None else "0",
                 "share_url": share_url
             })
             if isinstance(user_response, dict) and "data" in user_response:
@@ -178,14 +190,15 @@ class DouyinWebCrawler:
                     if aweme_id:
                         all_aweme_ids.append(aweme_id)
                         work_data.append({
-                            {
-                                "aweme_id": aweme['aweme_id'],
-                                "description": aweme['desc'],
-                                "streamer_unique_id": unique_id,
-                                "create_time": aweme['create_time'],
-                                "play_addr":aweme['video']['play_addr']['url_list'][0],
-                                "cover":aweme['video']['cover']['url_list'][2]
-                            }
+                            "aweme_id": aweme.get('aweme_id', ''),
+                            "description": aweme.get('desc', ''),
+                            "sec_uid": sec_user_id,
+                            "create_time": aweme.get('create_time', 0),
+                            "play_addr": aweme.get('video', {}).get('play_addr', {}).get('url_list', [''])[
+                                0] if aweme.get('video', {}).get('play_addr', {}).get('url_list') else '',
+                            "cover": aweme.get('video', {}).get('cover', {}).get('url_list', [''])[0] if aweme.get(
+                                'video', {}).get('cover', {}).get('url_list') else '',
+                            "share_url":aweme.get('share_url','')
                         })
 
                 await self.create_works(work_data)
@@ -244,31 +257,7 @@ class DouyinWebCrawler:
         """创建主播"""
         url = "http://localhost:1323/api/v1/streamers"
         print(streamer_data)
-        cleaned_data = {
-            "uid": str(streamer_data['uid']),
-            "sec_uid": str(streamer_data['sec_uid']),
-            "unique_id": str(streamer_data['unique_id']),
-            "short_id": str(streamer_data['short_id']) if streamer_data['short_id'] else "",
-            "nickname": str(streamer_data['nickname']),
-            "signature": str(streamer_data['signature']) if streamer_data['signature'] else "",
-            "gender": int(streamer_data['gender']),
-            "country": str(streamer_data['country']) if streamer_data['country'] else "",
-            "province": str(streamer_data['province']) if streamer_data['province'] else "",
-            "city": str(streamer_data['city']) if streamer_data['city'] else "",
-            "district": str(streamer_data['district']) if streamer_data['district'] else "",  # 处理None
-            "ip_location": str(streamer_data['ip_location']) if streamer_data['ip_location'] else "",
-            "aweme_count": int(streamer_data['aweme_count']),
-            "follower_count": int(streamer_data['follower_count']),
-            "following_count": int(streamer_data['following_count']),
-            "favoriting_count": int(streamer_data['favoriting_count']),
-            "total_favorited": int(streamer_data['total_favorited']),
-            "max_follower_count": int(streamer_data['max_follower_count']),
-            "avatar_larger": str(streamer_data['avatar_larger']),
-            "live_status": int(streamer_data['live_status']),
-            "room_id": str(streamer_data['room_id']) if streamer_data['room_id'] else "",  # 转换为字符串
-            "share_url": str(streamer_data['share_url'])
-        }
-        response = requests.post(url, json=cleaned_data)
+        response = requests.post(url, json=streamer_data)
         if response.status_code == 200:
             result = response.json()
             if result.get('code') == 0:
