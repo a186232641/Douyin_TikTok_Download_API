@@ -113,6 +113,9 @@ class DouyinWebCrawler:
 
             print(f"成功获取用户ID: {sec_user_id}")
 
+            # 首先从中台获取已存在的作品ID
+            existing_aweme_ids = await self.get_existing_works(sec_user_id)
+
             # 获取用户信息
             user_response = await self.handler_user_profile(sec_user_id)
             await self.create_streamer({
@@ -165,6 +168,7 @@ class DouyinWebCrawler:
 
             # 分页获取所有视频ID
             all_aweme_ids = []
+            new_works_data = []  # 只保存新作品数据
             max_cursor = 0
             has_more = 1
 
@@ -183,32 +187,43 @@ class DouyinWebCrawler:
                     print("没有获取到作品数据，可能到达最后一页")
                     break
 
-                # 提取每个作品的ID
+                # 提取每个作品的ID并检查是否为新作品
                 work_data = []
                 for aweme in aweme_list:
                     aweme_id = aweme.get("aweme_id")
                     if aweme_id:
                         all_aweme_ids.append(aweme_id)
-                        work_data.append({
-                            "aweme_id": aweme.get('aweme_id', ''),
-                            "description": aweme.get('desc', ''),
-                            "sec_uid": sec_user_id,
-                            "create_time": aweme.get('create_time', 0),
-                            "play_addr": aweme.get('video', {}).get('play_addr', {}).get('url_list', [''])[
-                                0] if aweme.get('video', {}).get('play_addr', {}).get('url_list') else '',
-                            "cover": aweme.get('video', {}).get('cover', {}).get('url_list', [''])[0] if aweme.get(
-                                'video', {}).get('cover', {}).get('url_list') else '',
-                            "share_url":aweme.get('share_url','')
-                        })
+                        # 只处理中台不存在的作品
+                        if aweme_id not in existing_aweme_ids:
+                            work_info = {
+                                "aweme_id": aweme.get('aweme_id', ''),
+                                "description": aweme.get('desc', ''),
+                                "sec_uid": sec_user_id,
+                                "create_time": aweme.get('create_time', 0),
+                                "play_addr": aweme.get('video', {}).get('play_addr', {}).get('url_list', [''])[
+                                    0] if aweme.get('video', {}).get('play_addr', {}).get('url_list') else '',
+                                "cover": aweme.get('video', {}).get('cover', {}).get('url_list', [''])[0] if aweme.get(
+                                    'video', {}).get('cover', {}).get('url_list') else '',
+                                "share_url": aweme.get('share_url', '')
+                            }
+                            work_data.append(work_info)
+                            new_works_data.append(work_info)
 
-                await self.create_works(work_data)
-                print(f"已获取{len(aweme_list)}个作品，累计{len(all_aweme_ids)}个")
+                # 只上传新作品到中台
+                if work_data:
+                    await self.create_works(work_data)
+                    print(f"本批次新作品: {len(work_data)}个, 累计获取: {len(all_aweme_ids)}个")
+                else:
+                    print(f"本批次无新作品, 累计获取: {len(all_aweme_ids)}个")
 
                 # 检查是否有更多数据
                 has_more = data.get("has_more", 0)
                 max_cursor = data.get("max_cursor", 0)
 
+            missing_count = len(all_aweme_ids) - len(existing_aweme_ids)
             print(f"全部完成，共获取{len(all_aweme_ids)}个作品ID")
+            print(f"中台已存在: {len(existing_aweme_ids)}个, 新发现: {len(new_works_data)}个")
+            print(f"缺失作品数量: {missing_count}个")
 
             # 创建结果数据
             result = {
@@ -221,7 +236,12 @@ class DouyinWebCrawler:
                     "unique_id": unique_id
                 },
                 "aweme_ids": all_aweme_ids,
-                "count": len(all_aweme_ids),
+                "existing_aweme_ids": existing_aweme_ids,
+                "new_aweme_ids": [work['aweme_id'] for work in new_works_data],
+                "missing_count": missing_count,
+                "total_count": len(all_aweme_ids),
+                "existing_count": len(existing_aweme_ids),
+                "new_count": len(new_works_data),
                 "fullUserInfo": user_response
             }
 
@@ -270,19 +290,44 @@ class DouyinWebCrawler:
         return None
 
     async def create_works(self, work_data):
-        """创建主播"""
+        """创建作品"""
         url = "http://localhost:1323/api/v1/works/batch"
         response = requests.post(url, json=work_data)
         if response.status_code == 200:
             result = response.json()
             if result.get('code') == 0:
-                print(f"作品创建成功: {result['data']['nickname']}")
+                print(f"作品创建成功")
                 return result['data']
             else:
                 print(f"创建失败: {result.get('message')}")
         else:
             print(f"请求失败: {response.status_code}")
         return None
+
+    async def get_existing_works(self, sec_uid):
+        """从中台获取已存在的作品ID列表"""
+        url = f"http://localhost:1323/api/v1/streamers/{sec_uid}/works"
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('code') == 0:
+                    works_data = result.get('data')
+                    if works_data is None:
+                        print(f"作者不存在于中台")
+                        return []
+                    existing_ids = [work['aweme_id'] for work in works_data]
+                    print(f"中台已存在 {len(existing_ids)} 个作品")
+                    return existing_ids
+                else:
+                    print(f"获取作品失败: {result.get('message')}")
+                    return []
+            else:
+                print(f"请求失败: {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"获取中台作品数据出错: {e}")
+            return []
 
     # 获取单个作品数据
     async def fetch_one_video(self, aweme_id: str):

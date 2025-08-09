@@ -213,7 +213,7 @@ async def download_user_works(
         return ErrorResponseModel(code=code, message=result.get("error"), router=request.url.path,
                                   params=dict(request.query_params))
     nickname =  result["user_info"]["nickname"]
-    all_aweme_ids = result["aweme_ids"]
+    all_aweme_ids = result["new_aweme_ids"]
 
     # 清理昵称，确保可以作为文件夹名
     nickname = "".join([c if c.isalnum() or c in " _-" else "_" for c in nickname])
@@ -479,10 +479,7 @@ async def download_user_works(
 
     with open(stats_file, "w", encoding="utf-8") as f:
         json.dump({
-            "user_info": {
-                "nickname": nickname,
-                "downloaded_count": len(all_aweme_ids)
-            },
+            "user_info":result["user_info"] ,
             "download_stats": download_stats
         }, f, ensure_ascii=False, indent=2)
 
