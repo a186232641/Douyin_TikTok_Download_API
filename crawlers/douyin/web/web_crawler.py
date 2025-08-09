@@ -34,9 +34,12 @@
 
 
 import asyncio  # 异步I/O
+import json
 import os  # 系统操作
 import time  # 时间操作
 from urllib.parse import urlencode, quote  # URL编码
+
+import requests
 import yaml  # 配置文件
 # 基础爬虫客户端和抖音API端点
 from crawlers.base_crawler import BaseCrawler
@@ -65,6 +68,7 @@ path = os.path.abspath(os.path.dirname(__file__))
 with open(f"{path}/config.yaml", "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
+
 class DouyinWebCrawler:
 
     # 从配置文件中获取抖音的请求头
@@ -82,7 +86,8 @@ class DouyinWebCrawler:
         return kwargs
 
     "-------------------------------------------------------handler接口列表-------------------------------------------------------"
-    #获取用户的所有视频信息并可选择下载视频
+
+    # 获取用户的所有视频信息并可选择下载视频
     # 获取用户的所有视频信息并可选择下载视频
     async def get_all_user_videos(self, share_url: str, save_to_file=True, output_folder="output"):
         """
@@ -110,12 +115,34 @@ class DouyinWebCrawler:
 
             # 获取用户信息
             user_response = await self.handler_user_profile(sec_user_id)
-
+            await self.create_streamer({
+                "uid": user_response['user']['uid'],
+                "sec_uid": user_response['user']['sec_uid'],
+                "unique_id": user_response['user']['unique_id'],
+                "short_id": user_response['user']['short_id'],
+                "nickname": user_response['user']['nickname'],
+                "signature": user_response['user']['signature'],
+                "gender": user_response['user']['gender'],
+                "country": user_response['user']['country'],
+                "province": user_response['user']['province'],
+                "city": user_response['user']['city'],
+                "district": user_response['user']['district'],
+                "ip_location": user_response['user']['ip_location'],
+                "aweme_count": user_response['user']['aweme_count'],
+                "follower_count": user_response['user']['follower_count'],
+                "following_count": user_response['user']['following_count'],
+                "favoriting_count": user_response['user']['favoriting_count'],
+                "total_favorited": user_response['user']['total_favorited'],
+                "max_follower_count": user_response['user']['max_follower_count'],
+                "avatar_larger": user_response['user']['avatar_larger']['url_list'][0],
+                "live_status": user_response['user']['live_status'],
+                "room_id": user_response['user']['room_id'],
+                "share_url": share_url
+            })
             if isinstance(user_response, dict) and "data" in user_response:
                 user_data = user_response["data"]
             else:
                 user_data = user_response
-
             if "user" not in user_data:
                 print("无法获取用户信息")
                 return {"success": False, "error": "无法获取用户信息"}
@@ -132,7 +159,6 @@ class DouyinWebCrawler:
             while has_more:
                 print(f"正在获取作品列表，max_cursor={max_cursor}")
                 response = await self.fetch_user_post_videos(sec_user_id, max_cursor, 20)
-
                 # 获取返回数据中的实际内容
                 if isinstance(response, dict) and "data" in response:
                     data = response["data"]
@@ -146,11 +172,23 @@ class DouyinWebCrawler:
                     break
 
                 # 提取每个作品的ID
+                work_data = []
                 for aweme in aweme_list:
                     aweme_id = aweme.get("aweme_id")
                     if aweme_id:
                         all_aweme_ids.append(aweme_id)
+                        work_data.append({
+                            {
+                                "aweme_id": aweme['aweme_id'],
+                                "description": aweme['desc'],
+                                "streamer_unique_id": unique_id,
+                                "create_time": aweme['create_time'],
+                                "play_addr":aweme['video']['play_addr']['url_list'][0],
+                                "cover":aweme['video']['cover']['url_list'][2]
+                            }
+                        })
 
+                await self.create_works(work_data)
                 print(f"已获取{len(aweme_list)}个作品，累计{len(all_aweme_ids)}个")
 
                 # 检查是否有更多数据
@@ -166,12 +204,12 @@ class DouyinWebCrawler:
                 "user_info": {
                     "sec_user_id": sec_user_id,
                     "nickname": nickname,
-                    "url":share_url,
-                    "unique_id":unique_id
+                    "url": share_url,
+                    "unique_id": unique_id
                 },
                 "aweme_ids": all_aweme_ids,
                 "count": len(all_aweme_ids),
-                "fullUserInfo":user_response
+                "fullUserInfo": user_response
             }
 
             # 将结果保存到文件
@@ -196,20 +234,66 @@ class DouyinWebCrawler:
                 print(f"已将用户视频信息保存到: {filepath}")
                 result["file_path"] = filepath
 
-
             return result
 
         except Exception as e:
             print(f"获取用户视频列表出错: {e}")
             return {"success": False, "error": str(e)}
 
+    async def create_streamer(self, streamer_data):
+        """创建主播"""
+        url = "http://localhost:1323/api/v1/streamers"
+        print(streamer_data)
+        cleaned_data = {
+            "uid": str(streamer_data['uid']),
+            "sec_uid": str(streamer_data['sec_uid']),
+            "unique_id": str(streamer_data['unique_id']),
+            "short_id": str(streamer_data['short_id']) if streamer_data['short_id'] else "",
+            "nickname": str(streamer_data['nickname']),
+            "signature": str(streamer_data['signature']) if streamer_data['signature'] else "",
+            "gender": int(streamer_data['gender']),
+            "country": str(streamer_data['country']) if streamer_data['country'] else "",
+            "province": str(streamer_data['province']) if streamer_data['province'] else "",
+            "city": str(streamer_data['city']) if streamer_data['city'] else "",
+            "district": str(streamer_data['district']) if streamer_data['district'] else "",  # 处理None
+            "ip_location": str(streamer_data['ip_location']) if streamer_data['ip_location'] else "",
+            "aweme_count": int(streamer_data['aweme_count']),
+            "follower_count": int(streamer_data['follower_count']),
+            "following_count": int(streamer_data['following_count']),
+            "favoriting_count": int(streamer_data['favoriting_count']),
+            "total_favorited": int(streamer_data['total_favorited']),
+            "max_follower_count": int(streamer_data['max_follower_count']),
+            "avatar_larger": str(streamer_data['avatar_larger']),
+            "live_status": int(streamer_data['live_status']),
+            "room_id": str(streamer_data['room_id']) if streamer_data['room_id'] else "",  # 转换为字符串
+            "share_url": str(streamer_data['share_url'])
+        }
+        response = requests.post(url, json=cleaned_data)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('code') == 0:
+                print(f"主播创建成功: {result['data']['nickname']}")
+                return result['data']
+            else:
+                print(f"主播已存在 {result.get('message')}")
+        else:
+            print(f"请求失败: {response.status_code}")
+        return None
 
-
-
-
-
-
-
+    async def create_works(self, work_data):
+        """创建主播"""
+        url = "http://localhost:1323/api/v1/works/batch"
+        response = requests.post(url, json=work_data)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('code') == 0:
+                print(f"作品创建成功: {result['data']['nickname']}")
+                return result['data']
+            else:
+                print(f"创建失败: {result.get('message')}")
+        else:
+            print(f"请求失败: {response.status_code}")
+        return None
 
     # 获取单个作品数据
     async def fetch_one_video(self, aweme_id: str):
