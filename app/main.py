@@ -34,9 +34,12 @@
 
 
 # FastAPI APP
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from app.api.router import router as api_router
+from app.api import task_queue
 
 # PyWebIO APP
 from app.web.app import MainView
@@ -47,6 +50,15 @@ import os
 
 # YAML
 import yaml
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await task_queue.start_worker()
+    try:
+        yield
+    finally:
+        await task_queue.stop_worker()
 
 # Load Config
 
@@ -88,6 +100,10 @@ tags_metadata = [
     {
         "name": "Download",
         "description": "**(下载数据接口/Download data endpoints)**",
+    },
+    {
+        "name": "Task-Queue",
+        "description": "**(异步任务队列接口/Async task queue endpoints)**",
     },
 ]
 
@@ -133,6 +149,7 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     docs_url=docs_url,  # 文档路径
     redoc_url=redoc_url,  # redoc文档路径
+    lifespan=lifespan,
 )
 
 # API router

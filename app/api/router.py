@@ -4,7 +4,7 @@ from app.api.endpoints import (
     tiktok_app,
     douyin_web,
     bilibili_web,
-    hybrid_parsing, ios_shortcut, download,
+    hybrid_parsing, ios_shortcut, download, task,
 )
 
 router = APIRouter()
@@ -27,3 +27,6 @@ router.include_router(ios_shortcut.router, prefix="/ios", tags=["iOS-Shortcut"])
 
 # Download routers
 router.include_router(download.router, tags=["Download"])
+
+# Task queue routers
+router.include_router(task.router, tags=["Task-Queue"])
