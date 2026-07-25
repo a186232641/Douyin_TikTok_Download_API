@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.api.endpoints import (
+    admin_config,
     tiktok_web,
     tiktok_app,
     douyin_web,
@@ -8,6 +9,9 @@ from app.api.endpoints import (
 )
 
 router = APIRouter()
+
+# Admin configuration routers
+router.include_router(admin_config.router, prefix="/admin/config", tags=["Admin-Config"])
 
 # TikTok routers
 router.include_router(tiktok_web.router, prefix="/tiktok/web", tags=["TikTok-Web-API"])

@@ -2,6 +2,9 @@
 Web:
   # APP Switch
   PyWebIO_Enable: true    # Enable APP | 启用APP
+  # Shared password for the Web UI and /api/admin/config endpoints.
+  # WEB_ACCESS_PASSWORD takes precedence. Leave empty to deny access.
+  Access_Password: ""
 
   # APP Information
   Domain: https://douyin.wtf    # Web domain | Web域名

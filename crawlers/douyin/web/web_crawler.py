@@ -41,6 +41,7 @@ from urllib.parse import urlencode, quote  # URL编码
 
 import requests
 import yaml  # 配置文件
+from app.runtime_config import get_douyin_cookie
 # 基础爬虫客户端和抖音API端点
 from crawlers.base_crawler import BaseCrawler
 from crawlers.douyin.web.endpoints import DouyinAPIEndpoints
@@ -79,7 +80,7 @@ class DouyinWebCrawler:
                 "Accept-Language": douyin_config["headers"]["Accept-Language"],
                 "User-Agent": douyin_config["headers"]["User-Agent"],
                 "Referer": douyin_config["headers"]["Referer"],
-                "Cookie": douyin_config["headers"]["Cookie"],
+                "Cookie": get_douyin_cookie(),
             },
             "proxies": {"http://": douyin_config["proxies"]["http"], "https://": douyin_config["proxies"]["https"]},
         }
