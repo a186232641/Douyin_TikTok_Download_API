@@ -90,7 +90,8 @@ class DouyinWebCrawler:
 
     # 获取用户的所有视频信息并可选择下载视频
     # 获取用户的所有视频信息并可选择下载视频
-    async def get_all_user_videos(self, share_url: str, save_to_file=True, output_folder="output"):
+    async def get_all_user_videos(self, share_url: str, save_to_file=True, output_folder="output",
+                                  before_request=None):
         """
         获取用户的所有视频ID并可选择保存到文件
 
@@ -98,6 +99,7 @@ class DouyinWebCrawler:
             share_url (str): 用户分享链接
             save_to_file (bool): 是否将结果保存到文件，默认为True
             output_folder (str): 输出文件夹路径，默认为"output"
+            before_request: 可选的 async 回调，每次请求抖音接口前调用（用于限速）
 
         Returns:
             dict: 包含用户信息和视频ID列表的字典
@@ -175,7 +177,20 @@ class DouyinWebCrawler:
 
             while has_more:
                 print(f"正在获取作品列表，max_cursor={max_cursor}")
-                response = await self.fetch_user_post_videos(sec_user_id, max_cursor, 20)
+                response = None
+                for attempt in range(1, 4):
+                    if before_request is not None:
+                        await before_request()
+                    try:
+                        response = await self.fetch_user_post_videos(sec_user_id, max_cursor, 20)
+                        break
+                    except Exception as page_error:
+                        # 403 是抖音风控的瞬时拒绝，退避后重试；其他错误直接抛出
+                        if "403" not in str(page_error) or attempt == 3:
+                            raise
+                        backoff = 15 * attempt
+                        print(f"作品列表被风控(403)，第{attempt}次，{backoff}s 后重试 max_cursor={max_cursor}")
+                        await asyncio.sleep(backoff)
                 # 获取返回数据中的实际内容
                 if isinstance(response, dict) and "data" in response:
                     data = response["data"]
@@ -278,7 +293,7 @@ class DouyinWebCrawler:
         """创建主播"""
         url = "http://localhost:1323/api/v1/streamers"
         print(streamer_data)
-        response = requests.post(url, json=streamer_data)
+        response = requests.post(url, json=streamer_data, timeout=30)
         if response.status_code == 200:
             result = response.json()
             if result.get('code') == 0:
@@ -293,7 +308,7 @@ class DouyinWebCrawler:
     async def create_works(self, work_data):
         """创建作品"""
         url = "http://localhost:1323/api/v1/works/batch"
-        response = requests.post(url, json=work_data)
+        response = requests.post(url, json=work_data, timeout=30)
         if response.status_code == 200:
             result = response.json()
             if result.get('code') == 0:
@@ -309,7 +324,7 @@ class DouyinWebCrawler:
         """从中台获取已存在的作品ID列表"""
         url = f"http://localhost:1323/api/v1/streamers/{sec_uid}/works"
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=30)
             if response.status_code == 200:
                 result = response.json()
                 if result.get('code') == 0:

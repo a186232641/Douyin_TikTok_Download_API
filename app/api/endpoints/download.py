@@ -214,6 +214,100 @@ async def _stream_download(url: str, headers: dict, file_path: str) -> bool:
         return False
 
 
+DETAIL_MAX_ATTEMPTS = 5
+
+
+async def _fetch_detail_with_retry(aweme_id: str, limiter: RateLimiter) -> dict:
+    """拉取作品详情。a_bogus 签名带随机成分，抖音会随机以 403 拒掉约一半请求；
+    遇到 403 就重新签名再试（每次都过 limiter），其他错误直接抛出。"""
+    for attempt in range(1, DETAIL_MAX_ATTEMPTS + 1):
+        await limiter.acquire()
+        try:
+            return await HybridCrawler.DouyinWebCrawler.fetch_one_video(aweme_id)
+        except Exception as e:
+            if "403" not in str(e) or attempt == DETAIL_MAX_ATTEMPTS:
+                raise
+            logger.warning(f"[downloadAll] {aweme_id} 详情 403，第 {attempt}/{DETAIL_MAX_ATTEMPTS} 次，换签名重试")
+    raise RuntimeError("unreachable")
+
+
+def _apply_detail(stats: dict, detail: dict) -> None:
+    """按单个作品的处理结果更新计数。"""
+    status = detail.get("status")
+    if status == "skipped":
+        stats["skipped"] += 1
+    elif status == "failed":
+        stats["failed"] += 1
+    else:  # success / partial
+        stats["success"] += 1
+        if detail.get("type") == "image":
+            stats["image_count"] += 1
+        else:
+            stats["video_count"] += 1
+
+
+async def _download_one(aweme_id: str, limiter: RateLimiter, headers: dict, with_watermark: bool,
+                        video_folder: str, image_folder: str) -> dict:
+    """处理单个作品，返回 details 里的一条记录（含 status）。内部吞掉异常，统一记为 failed。"""
+    try:
+        detail_response = await _fetch_detail_with_retry(aweme_id, limiter)
+        detail_data = detail_response.get("data", detail_response) if isinstance(detail_response, dict) else {}
+        aweme_detail = (detail_data or {}).get("aweme_detail") or {}
+        if not aweme_detail:
+            return {"aweme_id": aweme_id, "status": "failed", "error": "获取详情失败"}
+
+        desc = aweme_detail.get("desc", "").strip() or f"作品_{aweme_id}"
+
+        if aweme_detail.get("images") is not None:
+            # ---- 图集 ----
+            image_list = aweme_detail.get("images") or []
+            base = {"aweme_id": aweme_id, "type": "image", "desc": desc}
+            if not image_list:
+                return dict(base, status="failed", error="无法获取图片列表")
+
+            image_success = image_failed = 0
+            for img_index, img in enumerate(image_list):
+                img_filepath = os.path.join(image_folder, f"{aweme_id}-{img_index + 1}.jpg")
+                if os.path.exists(img_filepath):
+                    image_success += 1
+                    continue
+                url_list = img.get("url_list") or []
+                if not url_list:
+                    image_failed += 1
+                    continue
+                if await _stream_download(url_list[0], headers, img_filepath):
+                    image_success += 1
+                else:
+                    image_failed += 1
+
+            if image_success == 0:
+                return dict(base, status="failed", error="所有图片下载失败")
+            base.update(folder=os.path.basename(image_folder), count=image_success)
+            if image_failed == 0:
+                return dict(base, status="success")
+            return dict(base, failed=image_failed, status="partial")
+
+        # ---- 视频 ----
+        filename = f"{aweme_id}.mp4"
+        filepath = os.path.join(video_folder, filename)
+        entry = {"aweme_id": aweme_id, "type": "video", "desc": desc, "filename": filename}
+        if os.path.exists(filepath):
+            return dict(entry, status="skipped")
+
+        video_data = aweme_detail.get("video") or {}
+        addr = video_data.get("play_addr") if not with_watermark else video_data.get("download_addr")
+        url_list = (addr or {}).get("url_list") or []
+        if not url_list:
+            return dict(entry, status="failed", error="无法获取视频URL")
+        if await _stream_download(url_list[0], headers, filepath):
+            return dict(entry, status="success")
+        return dict(entry, status="failed", error="stream download failed")
+
+    except Exception as e:
+        logger.exception(f"[downloadAll] 处理 {aweme_id} 异常")
+        return {"aweme_id": aweme_id, "status": "failed", "error": str(e)}
+
+
 async def _run_user_download(task: Task, limiter: RateLimiter) -> dict:
     """worker 实际执行的下载逻辑。所有抖音 API 调用都过 limiter；CDN 媒体下载不限速。"""
     share_url: str = task.params["share_url"]
@@ -222,7 +316,7 @@ async def _run_user_download(task: Task, limiter: RateLimiter) -> dict:
 
     # 第一次 API 调用：拿用户全部作品 id 列表
     await limiter.acquire()
-    result = await HybridCrawler.DouyinWebCrawler.get_all_user_videos(share_url)
+    result = await HybridCrawler.DouyinWebCrawler.get_all_user_videos(share_url, before_request=limiter.acquire)
     if not result.get("success", False):
         raise RuntimeError(result.get("error") or "get_all_user_videos failed")
 
@@ -252,123 +346,38 @@ async def _run_user_download(task: Task, limiter: RateLimiter) -> dict:
     logger.info(f"[downloadAll] 用户={nickname} 待下载={len(all_aweme_ids)} 目录={user_folder}")
 
     kwargs = await HybridCrawler.DouyinWebCrawler.get_douyin_headers()
+    headers = kwargs["headers"]
 
     for index, aweme_id in enumerate(all_aweme_ids):
         logger.info(f"[downloadAll] [{index + 1}/{len(all_aweme_ids)}] 处理: {aweme_id}")
-        task_queue.update_progress(
-            task,
-            dict(stats, current={"aweme_id": aweme_id, "index": index + 1}),
-        )
+        current = {"aweme_id": aweme_id, "index": index + 1}
+        task_queue.update_progress(task, dict(stats, current=current))
 
-        try:
-            await limiter.acquire()
-            detail_response = await HybridCrawler.DouyinWebCrawler.fetch_one_video(aweme_id)
-            detail_data = detail_response.get("data", detail_response) if isinstance(detail_response, dict) else {}
-            aweme_detail = (detail_data or {}).get("aweme_detail") or {}
-            if not aweme_detail:
-                stats["failed"] += 1
-                stats["details"].append({"aweme_id": aweme_id, "status": "failed", "error": "获取详情失败"})
-                continue
-
-            desc = aweme_detail.get("desc", "").strip() or f"作品_{aweme_id}"
-
-            if aweme_detail.get("images") is not None:
-                # ---- 图集 ----
-                image_list = aweme_detail.get("images") or []
-                if not image_list:
-                    stats["failed"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "image", "desc": desc,
-                         "status": "failed", "error": "无法获取图片列表"}
-                    )
-                    continue
-
-                image_success = 0
-                image_failed = 0
-                for img_index, img in enumerate(image_list):
-                    img_filename = f"{aweme_id}-{img_index + 1}.jpg"
-                    img_filepath = os.path.join(image_folder, img_filename)
-                    if os.path.exists(img_filepath):
-                        image_success += 1
-                        continue
-                    url_list = img.get("url_list") or []
-                    if not url_list:
-                        image_failed += 1
-                        continue
-                    ok = await _stream_download(url_list[0], kwargs["headers"], img_filepath)
-                    if ok:
-                        image_success += 1
-                    else:
-                        image_failed += 1
-
-                if image_success > 0 and image_failed == 0:
-                    stats["success"] += 1
-                    stats["image_count"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "image", "desc": desc,
-                         "folder": os.path.basename(image_folder),
-                         "count": image_success, "status": "success"}
-                    )
-                elif image_success > 0:
-                    stats["success"] += 1
-                    stats["image_count"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "image", "desc": desc,
-                         "folder": os.path.basename(image_folder),
-                         "count": image_success, "failed": image_failed, "status": "partial"}
-                    )
-                else:
-                    stats["failed"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "image", "desc": desc,
-                         "status": "failed", "error": "所有图片下载失败"}
-                    )
-
-            else:
-                # ---- 视频 ----
-                filename = f"{aweme_id}.mp4"
-                filepath = os.path.join(video_folder, filename)
-                if os.path.exists(filepath):
-                    stats["skipped"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "video", "desc": desc,
-                         "filename": filename, "status": "skipped"}
-                    )
-                    continue
-
-                video_data = aweme_detail.get("video") or {}
-                addr = video_data.get("play_addr") if not with_watermark else video_data.get("download_addr")
-                url_list = (addr or {}).get("url_list") or []
-                if not url_list:
-                    stats["failed"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "video", "desc": desc,
-                         "status": "failed", "error": "无法获取视频URL"}
-                    )
-                    continue
-
-                ok = await _stream_download(url_list[0], kwargs["headers"], filepath)
-                if ok:
-                    stats["success"] += 1
-                    stats["video_count"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "video", "desc": desc,
-                         "filename": filename, "status": "success"}
-                    )
-                else:
-                    stats["failed"] += 1
-                    stats["details"].append(
-                        {"aweme_id": aweme_id, "type": "video", "desc": desc,
-                         "filename": filename, "status": "failed", "error": "stream download failed"}
-                    )
-
-        except Exception as e:
-            logger.exception(f"[downloadAll] 处理 {aweme_id} 异常")
-            stats["failed"] += 1
-            stats["details"].append({"aweme_id": aweme_id, "status": "failed", "error": str(e)})
-
+        detail = await _download_one(aweme_id, limiter, headers, with_watermark, video_folder, image_folder)
+        _apply_detail(stats, detail)
+        stats["details"].append(detail)
         stats["processed"] = index + 1
-        task_queue.update_progress(task, dict(stats, current={"aweme_id": aweme_id, "index": index + 1}))
+        task_queue.update_progress(task, dict(stats, current=current))
+
+    # 收尾：对失败的作品再跑一轮。抖音的 403 是按请求独立抽样的，重跑一次基本都能过。
+    failed_ids = [d["aweme_id"] for d in stats["details"] if d.get("status") == "failed"]
+    if failed_ids:
+        logger.info(f"[downloadAll] 收尾重试 {len(failed_ids)} 个失败作品")
+        stats["sweep"] = {"total": len(failed_ids), "recovered": 0}
+        for index, aweme_id in enumerate(failed_ids):
+            current = {"aweme_id": aweme_id, "index": index + 1, "phase": "sweep"}
+            task_queue.update_progress(task, dict(stats, current=current))
+            detail = await _download_one(aweme_id, limiter, headers, with_watermark, video_folder, image_folder)
+            if detail.get("status") == "failed":
+                continue
+            stats["failed"] -= 1
+            _apply_detail(stats, detail)
+            stats["sweep"]["recovered"] += 1
+            detail["retried"] = True
+            pos = next(i for i, d in enumerate(stats["details"]) if d["aweme_id"] == aweme_id)
+            stats["details"][pos] = detail
+        logger.info(f"[downloadAll] 收尾重试完成: 恢复 {stats['sweep']['recovered']}/{len(failed_ids)}")
+        task_queue.update_progress(task, dict(stats, current=None))
 
     # 保存最终统计
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
